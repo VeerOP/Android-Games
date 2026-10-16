@@ -1,15 +1,13 @@
 package com.example.games.ui.games.flappybird
 
 import android.app.Application
-import androidx.compose.runtime.State
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import androidx.lifecycle.AndroidViewModel
-import androidx.lifecycle.viewModelScope
 import com.example.games.data.PreferencesManager
-import kotlinx.coroutines.Job
-import kotlinx.coroutines.delay
-import kotlinx.coroutines.isActive
-import kotlinx.coroutines.launch
 import kotlin.random.Random
 
 enum class FlappyStatus {
@@ -18,10 +16,10 @@ enum class FlappyStatus {
 
 data class Pipe(
     val id: Long,
-    val x: Float,          // Virtual X coordinate
-    val gapY: Float,       // Top of gap in virtual Y
-    val gapHeight: Float,  // Height of gap
-    val width: Float,      // Width of pipe
+    val x: Float,
+    val gapY: Float,
+    val gapHeight: Float,
+    val width: Float,
     var hasScored: Boolean = false
 )
 
@@ -30,18 +28,6 @@ data class Cloud(
     val y: Float,
     val speed: Float,
     val size: Float
-)
-
-data class FlappyBirdState(
-    // Virtual coordinates: 0..1000 width, 0..1600 height
-    val birdY: Float = 800f,
-    val birdVelocity: Float = 0f,
-    val birdRotation: Float = 0f,
-    val pipes: List<Pipe> = emptyList(),
-    val score: Int = 0,
-    val highScore: Int = 0,
-    val status: FlappyStatus = FlappyStatus.READY,
-    val clouds: List<Cloud> = emptyList()
 )
 
 class FlappyBirdViewModel(application: Application) : AndroidViewModel(application) {
@@ -53,22 +39,32 @@ class FlappyBirdViewModel(application: Application) : AndroidViewModel(applicati
     val birdX = 250f
     val birdRadius = 38f
     val pipeWidth = 140f
-    val pipeGap = 420f       // Generous, fair gap for mobile touch screens
+    val pipeGap = 420f
 
     private val gravity = 1.05f
     private val jumpImpulse = -19.5f
     private val pipeSpeed = 6.2f
-    private val pipeSpawnDistance = 580f // Distance between consecutive pipes
+    private val pipeSpawnDistance = 580f
 
-    private val _state = mutableStateOf(
-        FlappyBirdState(
-            highScore = prefs.getFlappyHighScore(),
-            clouds = generateInitialClouds()
-        )
-    )
-    val state: State<FlappyBirdState> = _state
+    // UI state (recomposes UI ONLY on actual changes)
+    var status by mutableStateOf(FlappyStatus.READY)
+        private set
+    var score by mutableIntStateOf(0)
+        private set
+    var highScore by mutableIntStateOf(prefs.getFlappyHighScore())
+        private set
 
-    private var gameJob: Job? = null
+    // Animation / Render state (read inside Canvas DrawScope for 120 FPS hardware drawing)
+    var birdY by mutableFloatStateOf(800f)
+        private set
+    var birdRotation by mutableFloatStateOf(0f)
+        private set
+    var pipes by mutableStateOf<List<Pipe>>(emptyList())
+        private set
+    var clouds by mutableStateOf<List<Cloud>>(generateInitialClouds())
+        private set
+
+    private var birdVelocity = 0f
     private var nextPipeId = 0L
 
     private fun generateInitialClouds(): List<Cloud> {
@@ -83,38 +79,25 @@ class FlappyBirdViewModel(application: Application) : AndroidViewModel(applicati
     }
 
     fun startGame() {
-        if (_state.value.status == FlappyStatus.PLAYING) return
+        if (status == FlappyStatus.PLAYING) return
 
-        _state.value = _state.value.copy(
-            birdY = virtualHeight * 0.45f,
-            birdVelocity = jumpImpulse * 0.7f,
-            birdRotation = -20f,
-            pipes = emptyList(),
-            score = 0,
-            status = FlappyStatus.PLAYING
-        )
-
-        gameJob?.cancel()
-        gameJob = viewModelScope.launch {
-            while (isActive && _state.value.status == FlappyStatus.PLAYING) {
-                updateGameLoop()
-                delay(16) // ~60 FPS
-            }
-        }
+        birdY = virtualHeight * 0.45f
+        birdVelocity = jumpImpulse * 0.7f
+        birdRotation = -20f
+        pipes = emptyList()
+        score = 0
+        status = FlappyStatus.PLAYING
     }
 
     fun jump() {
-        when (_state.value.status) {
+        when (status) {
             FlappyStatus.READY -> startGame()
             FlappyStatus.PLAYING -> {
-                _state.value = _state.value.copy(
-                    birdVelocity = jumpImpulse,
-                    birdRotation = -25f
-                )
+                birdVelocity = jumpImpulse
+                birdRotation = -25f
             }
             FlappyStatus.PAUSED -> {
-                _state.value = _state.value.copy(status = FlappyStatus.PLAYING)
-                resumeLoop()
+                status = FlappyStatus.PLAYING
             }
             FlappyStatus.GAME_OVER -> {
                 startGame()
@@ -123,41 +106,28 @@ class FlappyBirdViewModel(application: Application) : AndroidViewModel(applicati
     }
 
     fun togglePause() {
-        if (_state.value.status == FlappyStatus.PLAYING) {
-            gameJob?.cancel()
-            _state.value = _state.value.copy(status = FlappyStatus.PAUSED)
-        } else if (_state.value.status == FlappyStatus.PAUSED) {
-            _state.value = _state.value.copy(status = FlappyStatus.PLAYING)
-            resumeLoop()
+        if (status == FlappyStatus.PLAYING) {
+            status = FlappyStatus.PAUSED
+        } else if (status == FlappyStatus.PAUSED) {
+            status = FlappyStatus.PLAYING
         }
     }
 
-    private fun resumeLoop() {
-        gameJob?.cancel()
-        gameJob = viewModelScope.launch {
-            while (isActive && _state.value.status == FlappyStatus.PLAYING) {
-                updateGameLoop()
-                delay(16)
-            }
-        }
-    }
-
-    private fun updateGameLoop() {
-        val current = _state.value
-        if (current.status != FlappyStatus.PLAYING) return
+    // Called on hardware vsync frame pulse
+    fun updateFrame() {
+        if (status != FlappyStatus.PLAYING) return
 
         // 1. Update Bird physics
-        val newVelocity = current.birdVelocity + gravity
-        val newY = current.birdY + newVelocity
-        // Rotate smoothly downwards as speed increases
-        val newRotation = if (newVelocity < 0) {
+        birdVelocity += gravity
+        val newY = birdY + birdVelocity
+        val newRotation = if (birdVelocity < 0) {
             -25f
         } else {
-            (-25f + (newVelocity * 4.5f)).coerceAtMost(70f)
+            (-25f + (birdVelocity * 4.5f)).coerceAtMost(70f)
         }
 
         // 2. Move Pipes
-        val movedPipes = current.pipes
+        val movedPipes = pipes
             .map { it.copy(x = it.x - pipeSpeed) }
             .filter { it.x + it.width > -50f }
 
@@ -179,16 +149,16 @@ class FlappyBirdViewModel(application: Application) : AndroidViewModel(applicati
         }
 
         // 4. Update Score accurately
-        var newScore = current.score
+        var currentScore = score
         pipesWithNew.forEach { pipe ->
             if (!pipe.hasScored && birdX > pipe.x + pipe.width) {
                 pipe.hasScored = true
-                newScore++
+                currentScore++
             }
         }
 
         // 5. Parallax Clouds
-        val newClouds = current.clouds.map { cloud ->
+        val newClouds = clouds.map { cloud ->
             var nx = cloud.x - cloud.speed
             if (nx + cloud.size < 0) nx = virtualWidth + 50f
             cloud.copy(x = nx)
@@ -196,19 +166,15 @@ class FlappyBirdViewModel(application: Application) : AndroidViewModel(applicati
 
         // 6. Collision Check
         var collision = false
-        val groundY = virtualHeight - 100f // Floor limit
+        val groundY = virtualHeight - 100f
 
-        // Ground or ceiling
         if (newY - birdRadius < 0f || newY + birdRadius >= groundY) {
             collision = true
         }
 
-        // Pipe collision
         if (!collision) {
             for (pipe in pipesWithNew) {
-                // Horizontal overlap
                 if (birdX + birdRadius > pipe.x && birdX - birdRadius < pipe.x + pipe.width) {
-                    // Vertical hit (top pipe or bottom pipe)
                     if (newY - birdRadius < pipe.gapY || newY + birdRadius > pipe.gapY + pipe.gapHeight) {
                         collision = true
                         break
@@ -218,37 +184,26 @@ class FlappyBirdViewModel(application: Application) : AndroidViewModel(applicati
         }
 
         if (collision) {
-            gameJob?.cancel()
-            val finalHighScore = maxOf(newScore, current.highScore)
+            val finalHighScore = maxOf(currentScore, highScore)
             prefs.saveFlappyHighScore(finalHighScore)
-            _state.value = current.copy(
-                status = FlappyStatus.GAME_OVER,
-                score = newScore,
-                highScore = finalHighScore
-            )
+            score = currentScore
+            highScore = finalHighScore
+            status = FlappyStatus.GAME_OVER
         } else {
-            _state.value = current.copy(
-                birdY = newY,
-                birdVelocity = newVelocity,
-                birdRotation = newRotation,
-                pipes = pipesWithNew,
-                score = newScore,
-                clouds = newClouds
-            )
+            birdY = newY
+            birdRotation = newRotation
+            pipes = pipesWithNew
+            clouds = newClouds
+            if (score != currentScore) {
+                score = currentScore
+            }
         }
     }
 
     fun restartGame() {
-        gameJob?.cancel()
-        _state.value = FlappyBirdState(
-            highScore = prefs.getFlappyHighScore(),
-            status = FlappyStatus.READY,
-            clouds = generateInitialClouds()
-        )
-    }
-
-    override fun onCleared() {
-        super.onCleared()
-        gameJob?.cancel()
+        status = FlappyStatus.READY
+        pipes = emptyList()
+        clouds = generateInitialClouds()
+        highScore = prefs.getFlappyHighScore()
     }
 }

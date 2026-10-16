@@ -37,9 +37,6 @@ fun Game2048Screen(
     val uiState by viewModel.uiState.collectAsState()
     val haptic = LocalHapticFeedback.current
 
-    var accumulatedDrag by remember { mutableStateOf(Offset.Zero) }
-    var dragLocked by remember { mutableStateOf(false) }
-
     Scaffold(
         topBar = {
             GameTopBar(
@@ -77,7 +74,7 @@ fun Game2048Screen(
                 }
             )
 
-            // 4x4 Grid Board with Smooth Swipe Detection
+            // 4x4 Grid Board with Zero-Recomposition High-Performance Swipe Detection
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -85,36 +82,44 @@ fun Game2048Screen(
                     .clip(RoundedCornerShape(20.dp))
                     .background(Color(0xFFBBADA0))
                     .pointerInput(Unit) {
+                        var totalDragX = 0f
+                        var totalDragY = 0f
+                        var isGestureTriggered = false
+
                         detectDragGestures(
                             onDragStart = {
-                                accumulatedDrag = Offset.Zero
-                                dragLocked = false
+                                totalDragX = 0f
+                                totalDragY = 0f
+                                isGestureTriggered = false
                             },
                             onDragEnd = {
-                                accumulatedDrag = Offset.Zero
-                                dragLocked = false
+                                totalDragX = 0f
+                                totalDragY = 0f
+                                isGestureTriggered = false
                             },
                             onDragCancel = {
-                                accumulatedDrag = Offset.Zero
-                                dragLocked = false
+                                totalDragX = 0f
+                                totalDragY = 0f
+                                isGestureTriggered = false
                             },
                             onDrag = { change, dragAmount ->
                                 change.consume()
-                                if (!dragLocked) {
-                                    accumulatedDrag += dragAmount
-                                    val threshold = 35f
-                                    if (abs(accumulatedDrag.x) > threshold || abs(accumulatedDrag.y) > threshold) {
-                                        val moved = if (abs(accumulatedDrag.x) > abs(accumulatedDrag.y)) {
-                                            if (accumulatedDrag.x > 0) viewModel.move(Direction.RIGHT)
+                                if (!isGestureTriggered) {
+                                    totalDragX += dragAmount.x
+                                    totalDragY += dragAmount.y
+                                    val threshold = 25f // Responsive quick flick threshold
+                                    if (abs(totalDragX) > threshold || abs(totalDragY) > threshold) {
+                                        isGestureTriggered = true
+                                        val moved = if (abs(totalDragX) > abs(totalDragY)) {
+                                            if (totalDragX > 0) viewModel.move(Direction.RIGHT)
                                             else viewModel.move(Direction.LEFT)
                                         } else {
-                                            if (accumulatedDrag.y > 0) viewModel.move(Direction.DOWN)
+                                            if (totalDragY > 0) viewModel.move(Direction.DOWN)
                                             else viewModel.move(Direction.UP)
                                         }
                                         if (moved) {
                                             haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
                                         }
-                                        dragLocked = true
                                     }
                                 }
                             }
@@ -289,25 +294,24 @@ fun GridBoardContent(grid: List<List<Int>>) {
 fun TileView(value: Int) {
     val (bgColor, textColor) = getTileColors(value)
 
-    Surface(
-        modifier = Modifier.fillMaxSize(),
-        color = bgColor,
-        shape = RoundedCornerShape(10.dp),
-        shadowElevation = if (value > 0) 3.dp else 0.dp
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .clip(RoundedCornerShape(10.dp))
+            .background(bgColor),
+        contentAlignment = Alignment.Center
     ) {
         if (value != 0) {
-            Box(contentAlignment = Alignment.Center) {
-                Text(
-                    text = value.toString(),
-                    fontSize = when {
-                        value < 100 -> 30.sp
-                        value < 1000 -> 24.sp
-                        else -> 18.sp
-                    },
-                    fontWeight = FontWeight.Black,
-                    color = textColor
-                )
-            }
+            Text(
+                text = value.toString(),
+                fontSize = when {
+                    value < 100 -> 30.sp
+                    value < 1000 -> 24.sp
+                    else -> 18.sp
+                },
+                fontWeight = FontWeight.Black,
+                color = textColor
+            )
         }
     }
 }
