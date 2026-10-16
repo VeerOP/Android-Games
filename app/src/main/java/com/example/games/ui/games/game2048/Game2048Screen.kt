@@ -1,25 +1,32 @@
 package com.example.games.ui.games.game2048
 
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.Undo
 import androidx.compose.material.icons.filled.Refresh
-import androidx.compose.material.icons.filled.Undo
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.example.games.ui.common.GameOverCard
+import com.example.games.ui.common.GameTopBar
+import com.example.games.ui.theme.Color2048
 import kotlin.math.abs
 
 @Composable
@@ -28,144 +35,249 @@ fun Game2048Screen(
     viewModel: Game2048ViewModel = viewModel()
 ) {
     val uiState by viewModel.uiState.collectAsState()
-    var dragAmountAccumulated by remember { mutableStateOf(Offset.Zero) }
-    var moveTriggered by remember { mutableStateOf(false) }
+    val haptic = LocalHapticFeedback.current
 
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .padding(16.dp),
-        horizontalAlignment = Alignment.CenterHorizontally
-    ) {
-        // Top Bar
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                IconButton(onClick = onBack) {
-                    Icon(Icons.Default.ArrowBack, contentDescription = "Back")
+    var accumulatedDrag by remember { mutableStateOf(Offset.Zero) }
+    var dragLocked by remember { mutableStateOf(false) }
+
+    Scaffold(
+        topBar = {
+            GameTopBar(
+                title = "2048",
+                onBack = onBack,
+                accentColor = Color2048,
+                highScore = uiState.highScore,
+                onReset = {
+                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                    viewModel.resetGame()
                 }
-                Text(text = "2048", fontSize = 40.sp, fontWeight = FontWeight.Bold)
-            }
-            
-            Column(horizontalAlignment = Alignment.End) {
-                ScoreBox(label = "SCORE", score = uiState.score)
-                Spacer(modifier = Modifier.height(4.dp))
-                ScoreBox(label = "BEST", score = uiState.highScore)
-            }
+            )
         }
-
-        Spacer(modifier = Modifier.height(24.dp))
-
-        // Actions
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.End
-        ) {
-            Button(
-                onClick = { viewModel.undo() },
-                enabled = uiState.canUndo,
-                modifier = Modifier.padding(end = 8.dp)
-            ) {
-                Icon(Icons.Default.Undo, contentDescription = null, modifier = Modifier.size(18.dp))
-                Spacer(modifier = Modifier.width(4.dp))
-                Text("Undo")
-            }
-            Button(onClick = { viewModel.resetGame() }) {
-                Icon(Icons.Default.Refresh, contentDescription = null, modifier = Modifier.size(18.dp))
-                Spacer(modifier = Modifier.width(4.dp))
-                Text("New")
-            }
-        }
-
-        Spacer(modifier = Modifier.height(24.dp))
-
-        // Grid
-        Box(
+    ) { padding ->
+        Column(
             modifier = Modifier
-                .aspectRatio(1f)
-                .background(Color(0xFFBBADA0), RoundedCornerShape(8.dp))
-                .pointerInput(Unit) {
-                    detectDragGestures(
-                        onDragStart = { 
-                            dragAmountAccumulated = Offset.Zero
-                            moveTriggered = false
-                        },
-                        onDrag = { change, dragAmount ->
-                            if (!moveTriggered) {
-                                dragAmountAccumulated += dragAmount
-                                val threshold = 50f
-                                val x = dragAmountAccumulated.x
-                                val y = dragAmountAccumulated.y
-                                if (abs(x) > threshold || abs(y) > threshold) {
-                                    if (abs(x) > abs(y)) {
-                                        if (x > 0) viewModel.move(Direction.RIGHT)
-                                        else viewModel.move(Direction.LEFT)
-                                    } else {
-                                        if (y > 0) viewModel.move(Direction.DOWN)
-                                        else viewModel.move(Direction.UP)
+                .fillMaxSize()
+                .padding(padding)
+                .padding(horizontal = 20.dp, vertical = 12.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.SpaceBetween
+        ) {
+            // Score Board & Action Row
+            ScoreAndActionsRow(
+                score = uiState.score,
+                highScore = uiState.highScore,
+                canUndo = uiState.canUndo,
+                onUndo = {
+                    haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                    viewModel.undo()
+                },
+                onReset = {
+                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                    viewModel.resetGame()
+                }
+            )
+
+            // 4x4 Grid Board with Smooth Swipe Detection
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .aspectRatio(1f)
+                    .clip(RoundedCornerShape(20.dp))
+                    .background(Color(0xFFBBADA0))
+                    .pointerInput(Unit) {
+                        detectDragGestures(
+                            onDragStart = {
+                                accumulatedDrag = Offset.Zero
+                                dragLocked = false
+                            },
+                            onDragEnd = {
+                                accumulatedDrag = Offset.Zero
+                                dragLocked = false
+                            },
+                            onDragCancel = {
+                                accumulatedDrag = Offset.Zero
+                                dragLocked = false
+                            },
+                            onDrag = { change, dragAmount ->
+                                change.consume()
+                                if (!dragLocked) {
+                                    accumulatedDrag += dragAmount
+                                    val threshold = 35f
+                                    if (abs(accumulatedDrag.x) > threshold || abs(accumulatedDrag.y) > threshold) {
+                                        val moved = if (abs(accumulatedDrag.x) > abs(accumulatedDrag.y)) {
+                                            if (accumulatedDrag.x > 0) viewModel.move(Direction.RIGHT)
+                                            else viewModel.move(Direction.LEFT)
+                                        } else {
+                                            if (accumulatedDrag.y > 0) viewModel.move(Direction.DOWN)
+                                            else viewModel.move(Direction.UP)
+                                        }
+                                        if (moved) {
+                                            haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                                        }
+                                        dragLocked = true
                                     }
-                                    moveTriggered = true 
                                 }
                             }
-                        }
-                    )
-                }
-                .padding(8.dp)
-        ) {
-            GridContent(grid = uiState.grid)
+                        )
+                    }
+                    .padding(10.dp)
+            ) {
+                GridBoardContent(grid = uiState.grid)
+            }
 
-            if (uiState.isGameOver) {
-                Box(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .background(Color(0x88FFFFFF), RoundedCornerShape(8.dp)),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                        Text(text = "Game Over!", fontSize = 32.sp, fontWeight = FontWeight.Bold, color = Color(0xFF776E65))
-                        Button(onClick = { viewModel.resetGame() }) {
-                            Text("Try Again")
-                        }
+            // Quick instruction footer
+            Surface(
+                color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+                shape = RoundedCornerShape(16.dp),
+                modifier = Modifier.padding(bottom = 12.dp)
+            ) {
+                Text(
+                    text = "Swipe in any direction to merge matching tiles",
+                    style = MaterialTheme.typography.bodySmall.copy(
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    ),
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
+                )
+            }
+        }
+
+        // Win Celebration Dialog
+        if (uiState.isWin) {
+            AlertDialog(
+                onDismissRequest = { viewModel.dismissWinBanner() },
+                title = {
+                    Text(
+                        "🎉 You Reached 2048!",
+                        fontWeight = FontWeight.Bold,
+                        color = Color2048
+                    )
+                },
+                text = {
+                    Text("Incredible job! Would you like to keep playing for an even higher score or start a fresh board?")
+                },
+                confirmButton = {
+                    Button(
+                        onClick = { viewModel.dismissWinBanner() },
+                        colors = ButtonDefaults.buttonColors(containerColor = Color2048)
+                    ) {
+                        Text("Keep Playing")
+                    }
+                },
+                dismissButton = {
+                    TextButton(onClick = { viewModel.resetGame() }) {
+                        Text("New Game")
                     }
                 }
+            )
+        }
+
+        // Game Over Overlay
+        AnimatedVisibility(
+            visible = uiState.isGameOver,
+            enter = fadeIn(),
+            exit = fadeOut()
+        ) {
+            GameOverCard(
+                title = "No More Moves!",
+                score = uiState.score,
+                highScore = uiState.highScore,
+                accentColor = Color2048,
+                onRestart = {
+                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                    viewModel.resetGame()
+                },
+                onBack = onBack
+            )
+        }
+    }
+}
+
+@Composable
+fun ScoreAndActionsRow(
+    score: Int,
+    highScore: Int,
+    canUndo: Boolean,
+    onUndo: () -> Unit,
+    onReset: () -> Unit
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            ScoreBadgeItem(label = "SCORE", value = score, bgColor = Color(0xFFBBADA0))
+            ScoreBadgeItem(label = "BEST", value = highScore, bgColor = Color(0xFF8F7A66))
+        }
+
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            FilledTonalButton(
+                onClick = onUndo,
+                enabled = canUndo,
+                shape = RoundedCornerShape(12.dp),
+                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
+                modifier = Modifier.height(44.dp)
+            ) {
+                Icon(Icons.AutoMirrored.Filled.Undo, contentDescription = "Undo", modifier = Modifier.size(16.dp))
+                Spacer(modifier = Modifier.width(4.dp))
+                Text("Undo", fontSize = 13.sp, fontWeight = FontWeight.Bold)
+            }
+
+            Button(
+                onClick = onReset,
+                shape = RoundedCornerShape(12.dp),
+                colors = ButtonDefaults.buttonColors(containerColor = Color2048),
+                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
+                modifier = Modifier.height(44.dp)
+            ) {
+                Icon(Icons.Default.Refresh, contentDescription = "New Game", modifier = Modifier.size(16.dp))
+                Spacer(modifier = Modifier.width(4.dp))
+                Text("New", fontSize = 13.sp, fontWeight = FontWeight.Bold)
             }
         }
     }
 }
 
 @Composable
-fun ScoreBox(label: String, score: Int) {
+fun ScoreBadgeItem(label: String, value: Int, bgColor: Color) {
     Surface(
-        color = Color(0xFFBBADA0),
-        shape = RoundedCornerShape(4.dp)
+        color = bgColor,
+        shape = RoundedCornerShape(12.dp)
     ) {
         Column(
-            modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp),
+            modifier = Modifier.padding(horizontal = 14.dp, vertical = 6.dp),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
-            Text(text = label, color = Color(0xFFEEE4DA), fontSize = 12.sp, fontWeight = FontWeight.Bold)
-            Text(text = score.toString(), color = Color.White, fontSize = 18.sp, fontWeight = FontWeight.Bold)
+            Text(
+                text = label,
+                fontSize = 10.sp,
+                fontWeight = FontWeight.Bold,
+                color = Color(0xFFEEE4DA)
+            )
+            Text(
+                text = "$value",
+                fontSize = 18.sp,
+                fontWeight = FontWeight.Black,
+                color = Color.White
+            )
         }
     }
 }
 
 @Composable
-fun GridContent(grid: List<List<Int>>) {
+fun GridBoardContent(grid: List<List<Int>>) {
     Column(
         modifier = Modifier.fillMaxSize(),
-        verticalArrangement = Arrangement.spacedBy(8.dp)
+        verticalArrangement = Arrangement.spacedBy(10.dp)
     ) {
         grid.forEach { row ->
             Row(
                 modifier = Modifier.weight(1f),
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                horizontalArrangement = Arrangement.spacedBy(10.dp)
             ) {
                 row.forEach { value ->
                     Box(modifier = Modifier.weight(1f)) {
-                        Tile(value = value)
+                        TileView(value = value)
                     }
                 }
             }
@@ -174,47 +286,46 @@ fun GridContent(grid: List<List<Int>>) {
 }
 
 @Composable
-fun Tile(value: Int) {
+fun TileView(value: Int) {
+    val (bgColor, textColor) = getTileColors(value)
+
     Surface(
         modifier = Modifier.fillMaxSize(),
-        color = getTileColor(value),
-        shape = RoundedCornerShape(4.dp)
+        color = bgColor,
+        shape = RoundedCornerShape(10.dp),
+        shadowElevation = if (value > 0) 3.dp else 0.dp
     ) {
         if (value != 0) {
             Box(contentAlignment = Alignment.Center) {
                 Text(
                     text = value.toString(),
-                    fontSize = if (value < 100) 32.sp else if (value < 1000) 24.sp else 18.sp,
-                    fontWeight = FontWeight.Bold,
-                    color = if (value <= 4) Color(0xFF776E65) else Color.White
+                    fontSize = when {
+                        value < 100 -> 30.sp
+                        value < 1000 -> 24.sp
+                        else -> 18.sp
+                    },
+                    fontWeight = FontWeight.Black,
+                    color = textColor
                 )
             }
         }
     }
 }
 
-fun getTileColor(value: Int): Color {
+fun getTileColors(value: Int): Pair<Color, Color> {
     return when (value) {
-        0 -> Color(0xFFCDC1B4)
-        2 -> Color(0xFFEEE4DA)
-        4 -> Color(0xFFEDE0C8)
-        8 -> Color(0xFFF2B179)
-        16 -> Color(0xFFF59563)
-        32 -> Color(0xFFF67C5F)
-        64 -> Color(0xFFF65E3B)
-        128 -> Color(0xFFEDCF72)
-        256 -> Color(0xFFEDCC61)
-        512 -> Color(0xFFEDC850)
-        1024 -> Color(0xFFEDC53F)
-        2048 -> Color(0xFFEDC22E)
-        else -> Color(0xFF3C3A32)
-    }
-}
-
-@Preview(showBackground = true)
-@Composable
-fun Game2048Preview() {
-    MaterialTheme {
-        Game2048Screen(onBack = {})
+        0 -> Pair(Color(0xFFCDC1B4), Color.Transparent)
+        2 -> Pair(Color(0xFFEEE4DA), Color(0xFF776E65))
+        4 -> Pair(Color(0xFFEDE0C8), Color(0xFF776E65))
+        8 -> Pair(Color(0xFFF2B179), Color.White)
+        16 -> Pair(Color(0xFFF59563), Color.White)
+        32 -> Pair(Color(0xFFF67C5F), Color.White)
+        64 -> Pair(Color(0xFFEA580C), Color.White)
+        128 -> Pair(Color(0xFFEDCF72), Color.White)
+        256 -> Pair(Color(0xFFEDCC61), Color.White)
+        512 -> Pair(Color(0xFFEAB308), Color.White)
+        1024 -> Pair(Color(0xFFCA8A04), Color.White)
+        2048 -> Pair(Color(0xFF8B5CF6), Color.White)
+        else -> Pair(Color(0xFF4C1D95), Color.White)
     }
 }

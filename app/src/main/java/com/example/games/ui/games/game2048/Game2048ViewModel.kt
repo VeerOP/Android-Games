@@ -1,6 +1,8 @@
 package com.example.games.ui.games.game2048
 
-import androidx.lifecycle.ViewModel
+import android.app.Application
+import androidx.lifecycle.AndroidViewModel
+import com.example.games.data.PreferencesManager
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -13,16 +15,22 @@ data class Game2048State(
     val highScore: Int = 0,
     val isGameOver: Boolean = false,
     val isWin: Boolean = false,
+    val hasCelebratedWin: Boolean = false,
     val canUndo: Boolean = false
 )
 
 enum class Direction { UP, DOWN, LEFT, RIGHT }
 
-class Game2048ViewModel : ViewModel() {
-    private val _uiState = MutableStateFlow(Game2048State())
+class Game2048ViewModel(application: Application) : AndroidViewModel(application) {
+    private val prefs = PreferencesManager.getInstance(application)
+
+    private val _uiState = MutableStateFlow(
+        Game2048State(highScore = prefs.get2048HighScore())
+    )
     val uiState: StateFlow<Game2048State> = _uiState.asStateFlow()
 
-    private var previousState: Game2048State? = null
+    // Undo stack keeping up to 5 previous snapshots
+    private val historyStack = ArrayDeque<Game2048State>()
 
     init {
         resetGame()
@@ -32,8 +40,17 @@ class Game2048ViewModel : ViewModel() {
         val initialGrid = MutableList(4) { MutableList(4) { 0 } }
         addRandomTile(initialGrid)
         addRandomTile(initialGrid)
-        _uiState.value = Game2048State(grid = initialGrid.map { it.toList() })
-        previousState = null
+        historyStack.clear()
+
+        _uiState.value = Game2048State(
+            grid = initialGrid.map { it.toList() },
+            score = 0,
+            highScore = prefs.get2048HighScore(),
+            isGameOver = false,
+            isWin = false,
+            hasCelebratedWin = false,
+            canUndo = false
+        )
     }
 
     private fun addRandomTile(grid: MutableList<MutableList<Int>>) {
@@ -49,34 +66,57 @@ class Game2048ViewModel : ViewModel() {
         }
     }
 
-    fun move(direction: Direction) {
+    fun move(direction: Direction): Boolean {
         val currentState = _uiState.value
-        if (currentState.isGameOver) return
+        if (currentState.isGameOver) return false
 
         val currentGrid = currentState.grid.map { it.toMutableList() }.toMutableList()
         val (newGrid, moveScore) = performMove(currentGrid, direction)
 
         if (newGrid != currentState.grid) {
-            previousState = currentState
+            // Push to history
+            if (historyStack.size >= 5) historyStack.removeFirst()
+            historyStack.addLast(currentState)
+
             val gridWithNewTile = newGrid.map { it.toMutableList() }.toMutableList()
             addRandomTile(gridWithNewTile)
-            
+
             val finalGrid = gridWithNewTile.map { it.toList() }
             val newScore = currentState.score + moveScore
-            val newHighScore = if (newScore > currentState.highScore) newScore else currentState.highScore
-            val win = finalGrid.any { row -> row.any { it == 2048 } }
+            val newHighScore = maxOf(newScore, currentState.highScore)
+            prefs.save2048HighScore(newHighScore)
+
+            val reached2048 = finalGrid.any { row -> row.any { it == 2048 } }
+            val shouldCelebrateWin = reached2048 && !currentState.hasCelebratedWin
             val gameOver = !canMove(finalGrid)
 
-            _uiState.update { 
+            _uiState.update {
                 it.copy(
                     grid = finalGrid,
                     score = newScore,
                     highScore = newHighScore,
-                    isWin = win && !it.isWin, // Only show win once
+                    isWin = shouldCelebrateWin,
+                    hasCelebratedWin = it.hasCelebratedWin || reached2048,
                     isGameOver = gameOver,
-                    canUndo = true
+                    canUndo = historyStack.isNotEmpty()
                 )
             }
+            return true
+        }
+        return false
+    }
+
+    fun dismissWinBanner() {
+        _uiState.update { it.copy(isWin = false) }
+    }
+
+    fun undo() {
+        if (historyStack.isNotEmpty()) {
+            val previous = historyStack.removeLast()
+            _uiState.value = previous.copy(
+                canUndo = historyStack.isNotEmpty(),
+                isWin = false
+            )
         }
     }
 
@@ -153,12 +193,5 @@ class Game2048ViewModel : ViewModel() {
             }
         }
         return false
-    }
-
-    fun undo() {
-        previousState?.let {
-            _uiState.value = it.copy(canUndo = false)
-            previousState = null
-        }
     }
 }

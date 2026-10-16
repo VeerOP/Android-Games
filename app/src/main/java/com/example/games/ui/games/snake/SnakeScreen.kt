@@ -1,5 +1,8 @@
 package com.example.games.ui.games.snake
 
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.detectDragGestures
@@ -7,40 +10,57 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowLeft
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowUp
-import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Pause
+import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.example.games.ui.common.GameOverCard
+import com.example.games.ui.common.GameTopBar
+import com.example.games.ui.theme.ColorSnake
+import com.example.games.ui.theme.GoldTrophy
 import kotlin.math.abs
 
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun SnakeScreen(onBack: () -> Unit, viewModel: SnakeViewModel = viewModel()) {
+fun SnakeScreen(
+    onBack: () -> Unit,
+    viewModel: SnakeViewModel = viewModel()
+) {
     val state by viewModel.state.collectAsState()
+    val haptic = LocalHapticFeedback.current
+
+    var dragOffset by remember { mutableStateOf(Offset.Zero) }
 
     Scaffold(
         topBar = {
-            TopAppBar(
-                title = { Text("Snake Game") },
-                navigationIcon = {
-                    IconButton(onClick = onBack) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
-                    }
+            GameTopBar(
+                title = "Snake",
+                onBack = onBack,
+                accentColor = ColorSnake,
+                highScore = state.highScore,
+                onReset = {
+                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                    viewModel.restartGame()
                 }
             )
         }
@@ -49,162 +69,338 @@ fun SnakeScreen(onBack: () -> Unit, viewModel: SnakeViewModel = viewModel()) {
             modifier = Modifier
                 .fillMaxSize()
                 .padding(padding)
-                .padding(16.dp),
+                .padding(horizontal = 16.dp, vertical = 6.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.Center
+            verticalArrangement = Arrangement.SpaceBetween
         ) {
-            Text(
-                text = "Score: ${state.score}",
-                style = MaterialTheme.typography.titleLarge,
-                color = MaterialTheme.colorScheme.secondary
+            // HUD Banner
+            SnakeScoreHeader(
+                score = state.score,
+                highScore = state.highScore,
+                status = state.status,
+                onTogglePause = {
+                    haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                    viewModel.togglePause()
+                }
             )
 
-            Spacer(modifier = Modifier.height(16.dp))
-
+            // Game Board Canvas
             Box(
                 modifier = Modifier
-                    .aspectRatio(1f)
                     .fillMaxWidth()
-                    .clip(RoundedCornerShape(8.dp))
-                    .background(MaterialTheme.colorScheme.surfaceVariant)
-                    .pointerInput(Unit) {
-                        detectDragGestures { change, dragAmount ->
-                            change.consume()
-                            val (x, y) = dragAmount
-                            if (abs(x) > abs(y)) {
-                                if (x > 0) viewModel.onDirectionChange(Direction.RIGHT)
-                                else viewModel.onDirectionChange(Direction.LEFT)
-                            } else {
-                                if (y > 0) viewModel.onDirectionChange(Direction.DOWN)
-                                else viewModel.onDirectionChange(Direction.UP)
+                    .aspectRatio(1f)
+                    .clip(RoundedCornerShape(24.dp))
+                    .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f))
+                    .pointerInput(state.status) {
+                        detectDragGestures(
+                            onDragStart = { dragOffset = Offset.Zero },
+                            onDrag = { change, dragAmount ->
+                                change.consume()
+                                dragOffset += dragAmount
+                                val minSwipeDist = 40f
+                                if (abs(dragOffset.x) > minSwipeDist || abs(dragOffset.y) > minSwipeDist) {
+                                    if (abs(dragOffset.x) > abs(dragOffset.y)) {
+                                        if (dragOffset.x > 0) {
+                                            viewModel.onDirectionChange(Direction.RIGHT)
+                                        } else {
+                                            viewModel.onDirectionChange(Direction.LEFT)
+                                        }
+                                    } else {
+                                        if (dragOffset.y > 0) {
+                                            viewModel.onDirectionChange(Direction.DOWN)
+                                        } else {
+                                            viewModel.onDirectionChange(Direction.UP)
+                                        }
+                                    }
+                                    dragOffset = Offset.Zero
+                                }
                             }
+                        )
+                    },
+                contentAlignment = Alignment.Center
+            ) {
+                SnakeCanvasBoard(state = state)
+
+                // Ready Overlay
+                if (state.status == SnakeGameStatus.READY) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .background(Color.Black.copy(alpha = 0.35f)),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Button(
+                            onClick = {
+                                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                viewModel.startGame()
+                            },
+                            colors = ButtonDefaults.buttonColors(containerColor = ColorSnake),
+                            shape = RoundedCornerShape(20.dp),
+                            elevation = ButtonDefaults.buttonElevation(defaultElevation = 6.dp),
+                            modifier = Modifier.height(50.dp)
+                        ) {
+                            Icon(Icons.Default.PlayArrow, contentDescription = null)
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(
+                                "Tap to Start",
+                                style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold)
+                            )
                         }
                     }
-            ) {
-                SnakeGameBoard(state = state)
+                }
 
-                if (state.isGameOver) {
-                    GameOverOverlay(
-                        score = state.score,
-                        onRestart = { viewModel.restartGame() }
-                    )
+                // Paused Overlay
+                if (state.status == SnakeGameStatus.PAUSED) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .background(Color.Black.copy(alpha = 0.5f)),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text(
+                            text = "PAUSED",
+                            style = MaterialTheme.typography.headlineLarge.copy(
+                                fontWeight = FontWeight.Black,
+                                color = Color.White,
+                                letterSpacing = 2.sp
+                            )
+                        )
+                    }
                 }
             }
 
-            Spacer(modifier = Modifier.height(24.dp))
+            // Controls D-Pad
+            SnakeDPadControls(
+                onDirectionChange = { dir ->
+                    haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                    viewModel.onDirectionChange(dir)
+                }
+            )
+        }
 
-            SnakeControls(
-                onDirectionChange = { viewModel.onDirectionChange(it) }
+        // Game Over Overlay
+        AnimatedVisibility(
+            visible = state.status == SnakeGameStatus.GAME_OVER,
+            enter = fadeIn(),
+            exit = fadeOut()
+        ) {
+            GameOverCard(
+                title = "Snake Crashed!",
+                score = state.score,
+                highScore = state.highScore,
+                accentColor = ColorSnake,
+                onRestart = {
+                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                    viewModel.restartGame()
+                },
+                onBack = onBack
             )
         }
     }
 }
 
 @Composable
-fun SnakeGameBoard(state: SnakeState) {
-    val snakeColor = MaterialTheme.colorScheme.primary
-    val foodColor = MaterialTheme.colorScheme.error
-    val gridColor = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.1f)
+fun SnakeScoreHeader(
+    score: Int,
+    highScore: Int,
+    status: SnakeGameStatus,
+    onTogglePause: () -> Unit
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(16.dp))
+            .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f))
+            .padding(horizontal = 16.dp, vertical = 8.dp),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                text = "Score: ",
+                style = MaterialTheme.typography.bodyMedium.copy(color = MaterialTheme.colorScheme.onSurfaceVariant)
+            )
+            Text(
+                text = "$score",
+                style = MaterialTheme.typography.titleLarge.copy(
+                    fontWeight = FontWeight.ExtraBold,
+                    color = ColorSnake
+                )
+            )
+        }
+
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    text = "Best: ",
+                    style = MaterialTheme.typography.bodyMedium.copy(color = MaterialTheme.colorScheme.onSurfaceVariant)
+                )
+                Text(
+                    text = "$highScore",
+                    style = MaterialTheme.typography.titleMedium.copy(
+                        fontWeight = FontWeight.Bold,
+                        color = GoldTrophy
+                    )
+                )
+            }
+
+            if (status == SnakeGameStatus.PLAYING || status == SnakeGameStatus.PAUSED) {
+                IconButton(
+                    onClick = onTogglePause,
+                    modifier = Modifier.size(36.dp)
+                ) {
+                    Icon(
+                        imageVector = if (status == SnakeGameStatus.PAUSED) Icons.Default.PlayArrow else Icons.Default.Pause,
+                        contentDescription = "Toggle Pause",
+                        tint = ColorSnake
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun SnakeCanvasBoard(state: SnakeState) {
+    val snakeHeadColor = ColorSnake
+    val snakeBodyColor = ColorSnake.copy(alpha = 0.85f)
+    val foodColor = Color(0xFFEF4444)
+    val dotGridColor = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.08f)
 
     Canvas(modifier = Modifier.fillMaxSize()) {
         val cellSize = size.width / state.boardSize
 
-        // Draw grid lines
-        for (i in 0..state.boardSize) {
-            drawLine(
-                color = gridColor,
-                start = Offset(i * cellSize, 0f),
-                end = Offset(i * cellSize, size.height),
-                strokeWidth = 1f
-            )
-            drawLine(
-                color = gridColor,
-                start = Offset(0f, i * cellSize),
-                end = Offset(size.width, i * cellSize),
-                strokeWidth = 1f
-            )
-        }
-
-        // Draw food
-        drawRect(
-            color = foodColor,
-            topLeft = Offset(state.food.first * cellSize + 2.dp.toPx(), state.food.second * cellSize + 2.dp.toPx()),
-            size = Size(cellSize - 4.dp.toPx(), cellSize - 4.dp.toPx())
-        )
-
-        // Draw snake
-        state.snake.forEachIndexed { index, part ->
-            val isHead = index == 0
-            drawRoundRect(
-                color = if (isHead) snakeColor else snakeColor.copy(alpha = 0.7f),
-                topLeft = Offset(part.first * cellSize + 1.dp.toPx(), part.second * cellSize + 1.dp.toPx()),
-                size = Size(cellSize - 2.dp.toPx(), cellSize - 2.dp.toPx()),
-                cornerRadius = androidx.compose.ui.geometry.CornerRadius(
-                    if (isHead) 8.dp.toPx() else 4.dp.toPx()
+        // Draw subtle background dots at grid centers
+        for (x in 0 until state.boardSize) {
+            for (y in 0 until state.boardSize) {
+                drawCircle(
+                    color = dotGridColor,
+                    radius = 1.2.dp.toPx(),
+                    center = Offset((x + 0.5f) * cellSize, (y + 0.5f) * cellSize)
                 )
-            )
-        }
-    }
-}
-
-@Composable
-fun SnakeControls(onDirectionChange: (Direction) -> Unit) {
-    Column(horizontalAlignment = Alignment.CenterHorizontally) {
-        ControlButton(Icons.Default.KeyboardArrowUp, "Up") { onDirectionChange(Direction.UP) }
-        Row {
-            ControlButton(Icons.AutoMirrored.Filled.KeyboardArrowLeft, "Left") { onDirectionChange(Direction.LEFT) }
-            Spacer(modifier = Modifier.width(48.dp))
-            ControlButton(Icons.AutoMirrored.Filled.KeyboardArrowRight, "Right") { onDirectionChange(Direction.RIGHT) }
-        }
-        ControlButton(Icons.Default.KeyboardArrowDown, "Down") { onDirectionChange(Direction.DOWN) }
-    }
-}
-
-@Composable
-fun ControlButton(icon: ImageVector, contentDescription: String, onClick: () -> Unit) {
-    FilledTonalIconButton(
-        onClick = onClick,
-        modifier = Modifier.size(56.dp),
-        shape = CircleShape
-    ) {
-        Icon(imageVector = icon, contentDescription = contentDescription, modifier = Modifier.size(32.dp))
-    }
-}
-
-@Composable
-fun GameOverOverlay(score: Int, onRestart: () -> Unit) {
-    Box(
-        modifier = Modifier
-            .fillMaxSize()
-            .background(Color.Black.copy(alpha = 0.7f)),
-        contentAlignment = Alignment.Center
-    ) {
-        Column(
-            horizontalAlignment = Alignment.CenterHorizontally,
-            modifier = Modifier
-                .background(MaterialTheme.colorScheme.surface, RoundedCornerShape(16.dp))
-                .padding(32.dp)
-        ) {
-            Text(
-                text = "Game Over",
-                style = MaterialTheme.typography.headlineMedium,
-                color = MaterialTheme.colorScheme.error,
-                fontWeight = FontWeight.Bold
-            )
-            Spacer(modifier = Modifier.height(8.dp))
-            Text(
-                text = "Final Score: $score",
-                style = MaterialTheme.typography.titleLarge
-            )
-            Spacer(modifier = Modifier.height(24.dp))
-            Button(
-                onClick = onRestart,
-                shape = RoundedCornerShape(8.dp)
-            ) {
-                Icon(Icons.Default.Refresh, contentDescription = null)
-                Spacer(modifier = Modifier.width(8.dp))
-                Text("Restart Game")
             }
         }
+
+        // Draw food (Juicy Apple style)
+        val foodCenter = Offset(
+            (state.food.first + 0.5f) * cellSize,
+            (state.food.second + 0.5f) * cellSize
+        )
+        val foodRadius = cellSize * 0.42f
+        drawCircle(
+            color = foodColor,
+            radius = foodRadius,
+            center = foodCenter
+        )
+        // Food shine highlight
+        drawCircle(
+            color = Color.White.copy(alpha = 0.6f),
+            radius = foodRadius * 0.3f,
+            center = Offset(foodCenter.x - foodRadius * 0.35f, foodCenter.y - foodRadius * 0.35f)
+        )
+        // Little green stem / leaf
+        drawCircle(
+            color = Color(0xFF22C55E),
+            radius = foodRadius * 0.25f,
+            center = Offset(foodCenter.x + foodRadius * 0.3f, foodCenter.y - foodRadius * 0.7f)
+        )
+
+        // Draw Snake body segments
+        state.snake.forEachIndexed { index, part ->
+            val isHead = index == 0
+            val segTopLeft = Offset(
+                part.first * cellSize + 1.5.dp.toPx(),
+                part.second * cellSize + 1.5.dp.toPx()
+            )
+            val segSize = Size(
+                cellSize - 3.dp.toPx(),
+                cellSize - 3.dp.toPx()
+            )
+
+            drawRoundRect(
+                color = if (isHead) snakeHeadColor else snakeBodyColor,
+                topLeft = segTopLeft,
+                size = segSize,
+                cornerRadius = CornerRadius(
+                    if (isHead) cellSize * 0.4f else cellSize * 0.25f
+                )
+            )
+
+            // Draw cute cartoon eyes on head
+            if (isHead) {
+                val headCenter = Offset(
+                    (part.first + 0.5f) * cellSize,
+                    (part.second + 0.5f) * cellSize
+                )
+                val eyeOffset = cellSize * 0.2f
+                val eyeRadius = cellSize * 0.12f
+                val pupilRadius = cellSize * 0.06f
+
+                val (eye1Center, eye2Center) = when (state.currentDirection) {
+                    Direction.UP -> Pair(
+                        Offset(headCenter.x - eyeOffset, headCenter.y - eyeOffset * 0.6f),
+                        Offset(headCenter.x + eyeOffset, headCenter.y - eyeOffset * 0.6f)
+                    )
+                    Direction.DOWN -> Pair(
+                        Offset(headCenter.x - eyeOffset, headCenter.y + eyeOffset * 0.6f),
+                        Offset(headCenter.x + eyeOffset, headCenter.y + eyeOffset * 0.6f)
+                    )
+                    Direction.LEFT -> Pair(
+                        Offset(headCenter.x - eyeOffset * 0.6f, headCenter.y - eyeOffset),
+                        Offset(headCenter.x - eyeOffset * 0.6f, headCenter.y + eyeOffset)
+                    )
+                    Direction.RIGHT -> Pair(
+                        Offset(headCenter.x + eyeOffset * 0.6f, headCenter.y - eyeOffset),
+                        Offset(headCenter.x + eyeOffset * 0.6f, headCenter.y + eyeOffset)
+                    )
+                }
+
+                // White sclera
+                drawCircle(color = Color.White, radius = eyeRadius, center = eye1Center)
+                drawCircle(color = Color.White, radius = eyeRadius, center = eye2Center)
+                // Black pupil
+                drawCircle(color = Color.Black, radius = pupilRadius, center = eye1Center)
+                drawCircle(color = Color.Black, radius = pupilRadius, center = eye2Center)
+            }
+        }
+    }
+}
+
+@Composable
+fun SnakeDPadControls(onDirectionChange: (Direction) -> Unit) {
+    Column(
+        horizontalAlignment = Alignment.CenterHorizontally,
+        modifier = Modifier.padding(bottom = 6.dp)
+    ) {
+        DPadButton(Icons.Default.KeyboardArrowUp, "Up") { onDirectionChange(Direction.UP) }
+        Row(horizontalArrangement = Arrangement.spacedBy(40.dp)) {
+            DPadButton(Icons.AutoMirrored.Filled.KeyboardArrowLeft, "Left") { onDirectionChange(Direction.LEFT) }
+            DPadButton(Icons.AutoMirrored.Filled.KeyboardArrowRight, "Right") { onDirectionChange(Direction.RIGHT) }
+        }
+        DPadButton(Icons.Default.KeyboardArrowDown, "Down") { onDirectionChange(Direction.DOWN) }
+    }
+}
+
+@Composable
+fun DPadButton(icon: ImageVector, description: String, onClick: () -> Unit) {
+    FilledTonalIconButton(
+        onClick = onClick,
+        modifier = Modifier
+            .size(52.dp)
+            .shadow(4.dp, CircleShape),
+        shape = CircleShape,
+        colors = IconButtonDefaults.filledTonalIconButtonColors(
+            containerColor = MaterialTheme.colorScheme.surfaceVariant
+        )
+    ) {
+        Icon(
+            imageVector = icon,
+            contentDescription = description,
+            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.size(28.dp)
+        )
     }
 }
